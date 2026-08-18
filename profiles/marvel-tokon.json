@@ -1,0 +1,18 @@
+{
+  "name": "marvel-tokon",
+  "displayName": "MARVEL Tōkon: Fighting Souls",
+  "folderName": "MTFS",
+  "executableName": "AMTFSSteam-Win64-Shipping.exe",
+  "layout": "steam",
+  "platformHints": {
+    "winePrefix": "default",
+    "architecture": "win64"
+  },
+  "additionalDirectories": [],
+  "companionFiles": [
+    {
+      "source": "steamapps/appmanifest_3787240.acf",
+      "relativeDestination": "steamapps/appmanifest_3787240.acf"
+    }
+  ]
+}

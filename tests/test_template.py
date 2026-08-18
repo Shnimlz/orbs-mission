@@ -8,11 +8,16 @@ import pytest
 from src.template import TemplateManager
 
 
-def test_template_immutability(tmp_path: Path):
-    rar_file = Path("Win64.rar")
-    if not rar_file.is_file():
-        pytest.skip("Win64.rar not found in current directory")
+def _find_test_template() -> Path:
+    candidates = [Path("Win64.rar"), Path("templates/Win64.rar")]
+    for c in candidates:
+        if c.is_file():
+            return c
+    pytest.skip("Win64.rar not found in current directory or templates/")
 
+
+def test_template_immutability():
+    rar_file = _find_test_template()
     hash_before = TemplateManager.get_archive_hash(rar_file)
 
     mgr = TemplateManager(rar_file)
@@ -22,11 +27,8 @@ def test_template_immutability(tmp_path: Path):
     assert hash_before == hash_after, "Template archive hash changed! Immutability violated."
 
 
-def test_archive_entry_security_validation(tmp_path: Path):
-    rar_file = Path("Win64.rar")
-    if not rar_file.is_file():
-        pytest.skip("Win64.rar not found in current directory")
-
+def test_archive_entry_security_validation():
+    rar_file = _find_test_template()
     mgr = TemplateManager(rar_file)
 
     # Valid entries test
@@ -51,11 +53,8 @@ def test_archive_entry_security_validation(tmp_path: Path):
         mgr.validate_archive_entries(["C:\\Windows\\system32\\cmd.exe"])
 
 
-def test_inspection_details(tmp_path: Path):
-    rar_file = Path("Win64.rar")
-    if not rar_file.is_file():
-        pytest.skip("Win64.rar not found in current directory")
-
+def test_inspection_details():
+    rar_file = _find_test_template()
     mgr = TemplateManager(rar_file)
     info = mgr.inspect()
 
@@ -63,3 +62,9 @@ def test_inspection_details(tmp_path: Path):
     assert "Rouge-Win64-Shipping.exe" in info["executables"]
     assert "WordpadFilter.dll" in info["dlls"]
     assert "es-MX" in info["languages"]
+
+
+def test_missing_template_handling(tmp_path: Path):
+    missing_file = tmp_path / "nonexistent.rar"
+    with pytest.raises(FileNotFoundError):
+        TemplateManager(missing_file)

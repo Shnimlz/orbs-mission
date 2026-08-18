@@ -1,12 +1,14 @@
 """
-Tests for cross-platform validation module.
+Tests for cross-platform validation module and asset source containment.
 """
 
+from pathlib import Path
 import pytest
 from src.validators import (
     validate_name,
     validate_executable_name,
     validate_relative_path,
+    validate_asset_source_path,
 )
 
 
@@ -74,3 +76,27 @@ def test_validate_relative_path():
 
     with pytest.raises(ValueError, match="must be relative"):
         validate_relative_path("/absolute/path")
+
+
+def test_asset_source_containment(tmp_path: Path):
+    assets_root = tmp_path / "assets"
+    assets_root.mkdir()
+    sample_file = assets_root / "config" / "test.conf"
+    sample_file.parent.mkdir()
+    sample_file.write_text("setting=1")
+
+    # Valid relative source inside assets_root
+    validated = validate_asset_source_path("config/test.conf", assets_root)
+    assert validated == sample_file.resolve()
+
+    # Traversal attempt
+    with pytest.raises(ValueError, match="Path traversal"):
+        validate_asset_source_path("config/../../escaped.conf", assets_root)
+
+    # Absolute path attempt
+    with pytest.raises(ValueError, match="must be relative"):
+        validate_asset_source_path(str(sample_file), assets_root)
+
+    # Missing file inside assets_root
+    with pytest.raises(FileNotFoundError):
+        validate_asset_source_path("config/nonexistent.conf", assets_root)

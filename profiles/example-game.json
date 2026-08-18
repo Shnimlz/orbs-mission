@@ -1,0 +1,21 @@
+{
+  "name": "example-game",
+  "displayName": "Example Game",
+  "folderName": "Example",
+  "executableName": "Example-Win64-Shipping.exe",
+  "layout": "steam",
+  "platformHints": {
+    "winePrefix": "default",
+    "architecture": "win64"
+  },
+  "additionalDirectories": [
+    "Saved/Config/WindowsNoEditor",
+    "Binaries/Win64"
+  ],
+  "companionFiles": [
+    {
+      "source": "metadata/example.conf",
+      "relativeDestination": "steamapps/metadata/example.conf"
+    }
+  ]
+}

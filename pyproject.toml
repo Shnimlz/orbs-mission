@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "win64-builder"
+version = "1.2.0"
+description = "Cross-Platform Win64 Template Builder & Profile Recipe Manager"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Win64 Builder Team" }
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

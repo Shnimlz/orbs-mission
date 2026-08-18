@@ -1,6 +1,6 @@
 """
-Filesystem and transactional operations module.
-Implements sibling staging, atomic replace with rollback, collision handling,
+Filesystem and transactional execution module.
+Coordinates BuildPlan execution via TransactionJournal, collision resolution,
 and ownership-based cleanup.
 """
 
@@ -9,23 +9,23 @@ import shutil
 import uuid
 from pathlib import Path
 from typing import Optional, List, Tuple
-from enum import Enum
+
+from src.transaction import (
+    TransactionJournal,
+    CollisionMode,
+    OWNERSHIP_MARKER_FILENAME,
+    TMP_BUILD_PREFIX,
+    BACKUP_PREFIX,
+)
+from src.plan import BuildPlan
 
 
-class CollisionMode(Enum):
-    CANCEL = "cancel"
-    REPLACE = "replace"
-    INCREMENTAL = "incremental"
-
-
-OWNERSHIP_MARKER_FILENAME = ".win64-builder-owned"
-TMP_BUILD_PREFIX = ".win64-builder-tmp-"
 CACHE_DIR_NAME = ".win64-builder-cache"
 
 
 class FilesystemBuilder:
     """
-    Handles transactional build and atomic placement into destination directory.
+    Coordinates transactional filesystem builds and cleanup operations.
     """
 
     @staticmethod
@@ -55,8 +55,8 @@ class FilesystemBuilder:
     @staticmethod
     def prepare_staging_directory(destination_dir: Path) -> Tuple[Path, str]:
         """
-        Creates a sibling staging directory inside the parent directory of destination.
-        Returns tuple of (staging_path, build_uuid).
+        Creates a sibling staging directory inside destination's parent.
+        Returns (staging_path, build_id).
         """
         parent_dir = destination_dir.parent
         parent_dir.mkdir(parents=True, exist_ok=True)
@@ -69,7 +69,7 @@ class FilesystemBuilder:
 
         # Mark ownership
         marker = staging_path / OWNERSHIP_MARKER_FILENAME
-        marker.write_text(f"win64-builder staging {build_id}\n")
+        marker.write_text(f"win64-builder staging {build_id}\n", encoding="utf-8")
 
         return staging_path, build_id
 
@@ -81,8 +81,7 @@ class FilesystemBuilder:
         dry_run: bool = False
     ) -> Path:
         """
-        Atomically commits staging directory to final destination.
-        Implements rollback if destination exists and mode is REPLACE.
+        Single-directory helper for committing a staging path to destination.
         """
         effective_dest = FilesystemBuilder.resolve_collision(destination_dir, mode)
         parent_dir = effective_dest.parent
@@ -95,15 +94,12 @@ class FilesystemBuilder:
 
         try:
             if effective_dest.exists() and mode == CollisionMode.REPLACE:
-                backup_name = f".{effective_dest.name}.backup-{build_id}"
+                backup_name = f".{effective_dest.name}{BACKUP_PREFIX}{build_id}"
                 backup_path = parent_dir / backup_name
-                # Backup existing destination
                 effective_dest.rename(backup_path)
 
-            # Move staging to final destination
             staging_path.rename(effective_dest)
 
-            # Cleanup ownership marker from final destination if desired, or keep it
             marker = effective_dest / OWNERSHIP_MARKER_FILENAME
             if marker.exists():
                 try:
@@ -111,43 +107,70 @@ class FilesystemBuilder:
                 except OSError:
                     pass
 
-            # Successfully moved; clean up backup if created
             if backup_path and backup_path.exists():
                 shutil.rmtree(backup_path, ignore_errors=True)
 
             return effective_dest
 
         except Exception as e:
-            # Rollback: restore backup if available
             if backup_path and backup_path.exists() and not effective_dest.exists():
                 try:
                     backup_path.rename(effective_dest)
                 except Exception:
                     pass
-            # Cleanup staging if failed
             if staging_path.exists():
                 shutil.rmtree(staging_path, ignore_errors=True)
             raise e
 
     @staticmethod
+    def execute_plan(
+        plan: BuildPlan,
+        collision_mode: CollisionMode = CollisionMode.CANCEL
+    ) -> List[Path]:
+        """
+        Executes a complete BuildPlan transactionally using TransactionJournal.
+        Returns the list of final committed paths.
+        """
+        journal = TransactionJournal(
+            output_root=plan.output_root,
+            collision_mode=collision_mode
+        )
+        journal.populate_from_plan(plan)
+
+        # 1. Stage all artifacts
+        journal.stage_all()
+
+        # 2. Commit all artifacts
+        journal.commit_all()
+
+        # 3. Finalize
+        journal.finalize_all()
+
+        return [entry.destination for entry in journal.entries]
+
+    @staticmethod
     def clean_owned_artifacts(root_dir: Path) -> List[Path]:
         """
-        Cleans exclusively artifacts created and tagged by win64-builder.
+        Cleans exclusively temporary artifacts created and tagged by win64-builder.
         """
         removed = []
 
-        # Remove local cache dir if present
         cache_dir = root_dir / CACHE_DIR_NAME
         if cache_dir.exists():
             shutil.rmtree(cache_dir, ignore_errors=True)
             removed.append(cache_dir)
 
-        # Search for temporary build directories prefixed with .win64-builder-tmp-
         for item in root_dir.glob(f"**/{TMP_BUILD_PREFIX}*"):
             if item.is_dir():
                 marker = item / OWNERSHIP_MARKER_FILENAME
                 if marker.exists():
                     shutil.rmtree(item, ignore_errors=True)
                     removed.append(item)
+            elif item.is_file():
+                try:
+                    item.unlink()
+                    removed.append(item)
+                except OSError:
+                    pass
 
         return removed

@@ -9,7 +9,10 @@ import sys
 import time
 import threading
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
+
+from src.plan import BuildPlan, DirectoryArtifact, FileArtifact
+from src.profiles import Profile, ProfileManager
 
 # ANSI Style Definitions
 BOLD = "\033[1m"
@@ -66,7 +69,7 @@ def print_banner(animated: bool = True):
             time.sleep(0.03)
 
     print("\n" + f"{CYAN}╭────────────────────────────────────────────────────────╮{RESET}")
-    print(f"{CYAN}│{RESET} {BOLD}{WHITE}   Win64 Template Builder{RESET} {DIM}(Cross-Platform CLI){RESET}          {CYAN}│{RESET}")
+    print(f"{CYAN}│{RESET} {BOLD}{WHITE}   Win64 Template Builder{RESET} {DIM}(Profile & Multi-Artifact){RESET} {CYAN}  │{RESET}")
     print(f"{CYAN}╰────────────────────────────────────────────────────────╯{RESET}\n")
 
 
@@ -123,7 +126,7 @@ def parse_args(args: Optional[list] = None) -> argparse.Namespace:
     """Parses command-line arguments."""
     parser = argparse.ArgumentParser(
         prog="win64-builder",
-        description="Cross-Platform Win64 Template Builder CLI"
+        description="Cross-Platform Win64 Template Builder & Profile Recipe Manager"
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
@@ -136,7 +139,19 @@ def parse_args(args: Optional[list] = None) -> argparse.Namespace:
     clean_parser = subparsers.add_parser("clean", help="Clean win64-builder temporary artifacts and cache")
     clean_parser.add_argument("--dir", type=Path, default=Path("."), help="Directory to search for temporary artifacts")
 
+    # Subcommand: profile
+    profile_parser = subparsers.add_parser("profile", help="Manage and inspect application profiles")
+    profile_subparsers = profile_parser.add_subparsers(dest="profile_action", help="Profile actions")
+
+    profile_list_parser = profile_subparsers.add_parser("list", help="List available application profiles")
+    profile_list_parser.add_argument("--dir", type=Path, default=Path("profiles"), help="Profiles directory")
+
+    profile_inspect_parser = profile_subparsers.add_parser("inspect", help="Inspect a specific profile")
+    profile_inspect_parser.add_argument("profile_name", type=str, help="Name or path of profile to inspect")
+    profile_inspect_parser.add_argument("--dir", type=Path, default=Path("profiles"), help="Profiles directory")
+
     # Main builder options
+    parser.add_argument("--profile", type=str, help="Application profile name or JSON file path")
     parser.add_argument("--template", type=Path, default=Path("Win64.rar"), help="Path to template Win64.rar")
     parser.add_argument("--folder", type=str, help="Main root folder name")
     parser.add_argument("--exe", type=str, help="Target executable name")
@@ -145,20 +160,79 @@ def parse_args(args: Optional[list] = None) -> argparse.Namespace:
     parser.add_argument("--steam-library", type=Path, help="Explicit Steam library directory (for steam layout)")
     parser.add_argument("--custom-path", type=str, help="Custom relative path (for custom layout)")
     parser.add_argument("--collision", choices=["cancel", "replace", "incremental"], default="cancel", help="Existing directory handling")
+    parser.add_argument("--assets-root", type=Path, default=Path("profiles/assets"), help="Assets root directory for companion files")
+    parser.add_argument("--allow-external-destination", action="store_true", help="Allow writing artifacts outside base output directory")
     parser.add_argument("--dry-run", action="store_true", help="Simulate build without modifying filesystem")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging output")
 
     return parser.parse_args(args)
 
 
+def display_build_plan(plan: BuildPlan) -> None:
+    """Renders a comprehensive multi-artifact dry-run plan."""
+    print(f"\n{BOLD}Profile:{RESET}")
+    print(f"  {CYAN}{plan.profile_name}{RESET}\n")
+
+    print(f"{BOLD}Build plan:{RESET}\n")
+
+    operations = []
+
+    for art in plan.artifacts:
+        if isinstance(art, DirectoryArtifact):
+            print(f"{BOLD}[Directory]{RESET}")
+            print(f"{CYAN}{art.destination}/{RESET}")
+            operations.append("CREATE directory tree")
+            if art.source_template:
+                print(f"  {DIM}├── [Template Extract]{RESET} {art.source_template.name}")
+                operations.append("EXTRACT template archive")
+            if art.executable_rename:
+                src_exe, target_exe = art.executable_rename
+                print(f"  {DIM}├── [Executable]{RESET} {GREEN}{target_exe}{RESET} {DIM}(from {src_exe}){RESET}")
+                operations.append("RENAME template executable")
+            for sub in art.subdirectories:
+                print(f"  {DIM}├── [Subdirectory]{RESET} {sub}/")
+                operations.append("ENSURE subdirectory structure")
+            for emb in art.embedded_files:
+                print(f"  {DIM}└── [Embedded Companion]{RESET} {emb.relative_destination} {DIM}(from {emb.source_path}){RESET}")
+                operations.append("COPY embedded companion file")
+            print()
+        elif isinstance(art, FileArtifact):
+            print(f"{BOLD}[File]{RESET}")
+            print(f"{CYAN}{art.destination}{RESET} {DIM}(from {art.source_path}){RESET}")
+            operations.append("COPY independent companion file")
+            print()
+
+    print(f"{BOLD}Operations:{RESET}")
+    # Deduplicate operations order-preservingly
+    seen_ops = set()
+    for op in operations:
+        if op not in seen_ops:
+            print(f"  {CYAN}•{RESET} {op}")
+            seen_ops.add(op)
+
+    print(f"\n{YELLOW}No filesystem changes will be made.{RESET}\n")
+
+
+def prompt_external_destinations(external_destinations: List[Path]) -> bool:
+    """Prompts user for explicit confirmation when external destinations are requested."""
+    print(f"\n{YELLOW}External destinations requested:{RESET}\n")
+    for idx, p in enumerate(external_destinations, 1):
+        print(f"  {idx}. {CYAN}{p}{RESET}")
+    print(f"\n{DIM}These paths are outside the configured output root.{RESET}\n")
+
+    if sys.stdin.isatty():
+        choice = input(f"Continue? [{GREEN}y{RESET}/{RED}N{RESET}] ").strip().lower()
+        return choice in ("y", "yes", "s", "sí")
+    else:
+        # In non-interactive mode, returning True requires --allow-external-destination was set
+        return True
+
+
 def run_interactive_prompts(config, candidate_exe: Optional[str] = None):
-    """
-    Runs interactive prompts with rich ANSI animations, typewriter text, and inputs.
-    """
+    """Runs interactive prompts with rich ANSI animations."""
     from src.validators import validate_name, validate_executable_name, validate_relative_path
 
     print_banner(animated=True)
-
     animate_text(f"{BOLD}Plantilla detectada:{RESET} {CYAN}{config.template_path.resolve()}{RESET}\n", delay=0.008)
 
     # Prompt Folder Name
