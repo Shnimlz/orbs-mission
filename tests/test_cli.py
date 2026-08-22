@@ -237,3 +237,256 @@ def test_main_cli_execution_with_profile(monkeypatch, capsys, tmp_path: Path):
 
     assert (out_dir / "steamapps" / "common" / "RealGame" / "RealGame.exe").exists()
     assert (out_dir / "steamapps" / "metadata" / "meta.conf").exists()
+
+
+def test_main_cli_list_folders(monkeypatch, capsys, tmp_path: Path):
+    out_dir = tmp_path / "output"
+    game_dir = out_dir / "steamapps" / "common" / "ExistingGame"
+    game_dir.mkdir(parents=True)
+    (game_dir / "Existing.exe").write_text("dummy")
+
+    monkeypatch.setattr(
+        sys, "argv",
+        ["main.py", "--list-folders", "--output", str(out_dir)]
+    )
+
+    exit_code = main()
+    assert exit_code == 0
+    cap = capsys.readouterr().out
+    assert "Carpetas existentes detectadas:" in cap
+    assert "ExistingGame" in cap
+    assert "Existing.exe" in cap
+
+
+def test_main_cli_existing_folder_renames_exe(monkeypatch, capsys, tmp_path: Path):
+    rar_file = Path("Win64.rar")
+    if not rar_file.is_file():
+        rar_file = Path("templates/Win64.rar")
+    if not rar_file.is_file():
+        pytest.skip("Win64.rar not found")
+
+    out_dir = tmp_path / "output"
+    game_dir = out_dir / "steamapps" / "common" / "PreExistingGame"
+    game_dir.mkdir(parents=True)
+    (game_dir / "OldName.exe").write_text("dummy binary")
+
+    monkeypatch.setattr(
+        sys, "argv",
+        [
+            "main.py",
+            "--folder", "PreExistingGame",
+            "--exe", "RenamedGame.exe",
+            "--layout", "steam",
+            "--output", str(out_dir),
+            "--template", str(rar_file)
+        ]
+    )
+
+    exit_code = main()
+    assert exit_code == 0
+    cap = capsys.readouterr().out
+    assert "Carpeta existente detectada" in cap or "Operación completada con éxito" in cap
+
+    # Verify that the exe was renamed in place without failing
+    assert (game_dir / "RenamedGame.exe").exists()
+    assert not (game_dir / "OldName.exe").exists()
+
+
+def test_main_cli_with_wine_flag(monkeypatch, capsys, tmp_path: Path):
+    from unittest.mock import patch
+    rar_file = Path("Win64.rar")
+    if not rar_file.is_file():
+        rar_file = Path("templates/Win64.rar")
+    if not rar_file.is_file():
+        pytest.skip("Win64.rar not found")
+
+    out_dir = tmp_path / "output"
+
+    monkeypatch.setattr(
+        sys, "argv",
+        [
+            "main.py",
+            "--folder", "WineGame",
+            "--exe", "WineGame.exe",
+            "--layout", "direct",
+            "--output", str(out_dir),
+            "--template", str(rar_file),
+            "--wine"
+        ]
+    )
+
+    with patch("src.runner.WineRunner.run", return_value=0) as mock_wine:
+        exit_code = main()
+        assert exit_code == 0
+        mock_wine.assert_called_once()
+
+
+def test_interactive_prompt_selection_existing_folder(monkeypatch, tmp_path: Path):
+    from src.config import BuildConfig
+    from src.cli import run_interactive_prompts
+
+    out_dir = tmp_path / "output"
+    g_dir = out_dir / "steamapps" / "common" / "SelectMe"
+    g_dir.mkdir(parents=True)
+    (g_dir / "SelectMe.exe").write_text("bin")
+
+    config = BuildConfig(
+        output_dir=out_dir,
+        template_path=Path("Win64.rar")
+    )
+
+    # User enters "1" to pick the existing folder, then presses Enter for exe default
+    user_inputs = iter(["1", ""])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(user_inputs))
+
+    updated_config = run_interactive_prompts(config, candidate_exe="SelectMe.exe")
+    assert updated_config.folder_name == "SelectMe"
+    assert updated_config.layout_type == "steam"
+    assert updated_config.exe_name == "SelectMe.exe"
+
+
+def test_main_cli_doctor_command(monkeypatch, capsys):
+    rar_file = Path("Win64.rar")
+    if not rar_file.is_file():
+        rar_file = Path("templates/Win64.rar")
+
+    monkeypatch.setattr(
+        sys, "argv",
+        ["main.py", "doctor", "--template", str(rar_file)]
+    )
+
+    exit_code = main()
+    assert exit_code == 0
+    cap = capsys.readouterr().out
+    assert "Diagnóstico del Sistema y Requisitos" in cap
+
+
+def test_main_menu_exit(monkeypatch):
+    from main import run_interactive_menu
+
+    # User chooses "0" (Exit) immediately
+    monkeypatch.setattr("builtins.input", lambda prompt="": "0")
+    exit_code = run_interactive_menu()
+    assert exit_code == 0
+
+
+def test_select_profile_prompt(monkeypatch, tmp_path: Path):
+    from src.cli import run_select_profile_prompt
+
+    p_dir = tmp_path / "profiles"
+    p_dir.mkdir()
+    p_data = {
+        "displayName": "Tokon Fighting",
+        "folderName": "MTFS",
+        "executableName": "Game.exe",
+        "layout": "steam"
+    }
+    (p_dir / "tokon.json").write_text(json.dumps(p_data), encoding="utf-8")
+
+    # Select profile 1
+    monkeypatch.setattr("builtins.input", lambda prompt="": "1")
+    prof = run_select_profile_prompt(p_dir)
+    assert prof is not None
+    assert prof.folder_name == "MTFS"
+    assert prof.executable_name == "Game.exe"
+
+
+def test_interactive_menu_selection_non_tty(monkeypatch):
+    from src.cli import MenuItem, interactive_menu_selection
+
+    items = [
+        MenuItem("1", "Option One"),
+        MenuItem("2", "Option Two"),
+        MenuItem("0", "Exit", is_back=True),
+    ]
+
+    monkeypatch.setattr("builtins.input", lambda prompt="": "2")
+    res = interactive_menu_selection(items, title_box="TEST MENU", default_index=0)
+    assert res == "2"
+
+
+def test_interactive_menu_selection_keyboard_navigation(monkeypatch):
+    from unittest.mock import MagicMock
+    from src.cli import MenuItem, interactive_menu_selection
+    import src.cli as cli_mod
+
+    items = [
+        MenuItem("1", "Option One"),
+        MenuItem("2", "Option Two"),
+        MenuItem("0", "Exit", is_back=True),
+    ]
+
+    # Simulate TTY
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+
+    # Test 1: Move down then enter -> Option 2
+    keys_down_enter = iter(["down", "enter"])
+    monkeypatch.setattr(cli_mod, "read_raw_key", lambda: next(keys_down_enter))
+    res1 = interactive_menu_selection(items, default_index=0)
+    assert res1 == "2"
+
+    # Test 2: Move left / back -> back_key ("0")
+    keys_left = iter(["left"])
+    monkeypatch.setattr(cli_mod, "read_raw_key", lambda: next(keys_left))
+    res2 = interactive_menu_selection(items, default_index=0)
+    assert res2 == "0"
+
+    # Test 3: Escape -> back_key ("0")
+    keys_esc = iter(["escape"])
+    monkeypatch.setattr(cli_mod, "read_raw_key", lambda: next(keys_esc))
+    res3 = interactive_menu_selection(items, default_index=0)
+    assert res3 == "0"
+
+    # Test 4: Right arrow (Forward / Select) on first item -> Option 1
+    keys_right = iter(["right"])
+    monkeypatch.setattr(cli_mod, "read_raw_key", lambda: next(keys_right))
+    res4 = interactive_menu_selection(items, default_index=0)
+    assert res4 == "1"
+
+    # Test 5: Direct number shortcut "2" -> Option 2
+    keys_direct = iter(["2"])
+    monkeypatch.setattr(cli_mod, "read_raw_key", lambda: next(keys_direct))
+    res5 = interactive_menu_selection(items, default_index=0)
+    assert res5 == "2"
+
+
+def test_read_raw_key_sequences(monkeypatch):
+    import os
+    import termios
+    import tty
+    from src.cli import read_raw_key
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdin, "fileno", lambda: 0)
+    monkeypatch.setattr(termios, "tcgetattr", lambda fd: [])
+    monkeypatch.setattr(termios, "tcsetattr", lambda fd, when, attr: None)
+    monkeypatch.setattr(tty, "setraw", lambda fd: None)
+
+    # Test UP arrow
+    monkeypatch.setattr(os, "read", lambda fd, n: b"\x1b[A")
+    assert read_raw_key() == "up"
+
+    # Test DOWN arrow
+    monkeypatch.setattr(os, "read", lambda fd, n: b"\x1b[B")
+    assert read_raw_key() == "down"
+
+    # Test RIGHT arrow
+    monkeypatch.setattr(os, "read", lambda fd, n: b"\x1b[C")
+    assert read_raw_key() == "right"
+
+    # Test LEFT arrow
+    monkeypatch.setattr(os, "read", lambda fd, n: b"\x1b[D")
+    assert read_raw_key() == "left"
+
+    # Test Enter
+    monkeypatch.setattr(os, "read", lambda fd, n: b"\r")
+    assert read_raw_key() == "enter"
+
+    # Test Direct key
+    monkeypatch.setattr(os, "read", lambda fd, n: b"1")
+    assert read_raw_key() == "1"
+
+
+
+

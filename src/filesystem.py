@@ -20,7 +20,19 @@ from src.transaction import (
 from src.plan import BuildPlan
 
 
+from dataclasses import dataclass
+
 CACHE_DIR_NAME = ".win64-builder-cache"
+
+
+@dataclass
+class DiscoveredFolder:
+    """Represents an existing game or application folder in the output filesystem."""
+    name: str
+    layout: str
+    path: Path
+    executables: List[str]
+
 
 
 class FilesystemBuilder:
@@ -174,3 +186,90 @@ class FilesystemBuilder:
                     pass
 
         return removed
+
+    @staticmethod
+    def discover_existing_folders(output_root: Path) -> List[DiscoveredFolder]:
+        """
+        Scans output_root and output_root/steamapps/common for existing game folders.
+        Returns sorted list of DiscoveredFolder instances.
+        """
+        output_resolved = output_root.resolve()
+        if not output_resolved.is_dir():
+            return []
+
+        folders: List[DiscoveredFolder] = []
+        seen_paths = set()
+
+        # 1. Check steamapps/common structure
+        steam_common = output_resolved / "steamapps" / "common"
+        if steam_common.is_dir():
+            for item in steam_common.iterdir():
+                if item.is_dir() and not item.name.startswith("."):
+                    exes = [f.name for f in item.glob("*.exe") if f.is_file()]
+                    if not exes:
+                        exes = [f.name for f in item.glob("**/*.exe") if f.is_file()]
+                    folders.append(DiscoveredFolder(
+                        name=item.name,
+                        layout="steam",
+                        path=item,
+                        executables=exes
+                    ))
+                    seen_paths.add(item)
+
+        # 2. Check direct folders under output_root
+        for item in output_resolved.iterdir():
+            if item.is_dir() and not item.name.startswith(".") and item.name.lower() != "steamapps" and item not in seen_paths:
+                exes = [f.name for f in item.glob("*.exe") if f.is_file()]
+                if not exes:
+                    exes = [f.name for f in item.glob("**/*.exe") if f.is_file()]
+                folders.append(DiscoveredFolder(
+                    name=item.name,
+                    layout="direct",
+                    path=item,
+                    executables=exes
+                ))
+                seen_paths.add(item)
+
+        return sorted(folders, key=lambda f: f.name.lower())
+
+    @staticmethod
+    def rename_executable_in_folder(
+        folder_path: Path,
+        target_exe_name: str,
+        source_exe_name: Optional[str] = None
+    ) -> Tuple[bool, Path, str]:
+        """
+        Renames an executable in an existing game folder to target_exe_name.
+        Returns (success, final_exe_path, status_message).
+        """
+        target_exe_path = folder_path / target_exe_name
+        if target_exe_path.is_file():
+            return True, target_exe_path, f"El ejecutable '{target_exe_name}' ya está presente y configurado en {folder_path.name}."
+
+        candidate: Optional[Path] = None
+
+        # Check source executable hint if provided
+        if source_exe_name and (folder_path / source_exe_name).is_file():
+            candidate = folder_path / source_exe_name
+        else:
+            # Check executables in the root of the folder
+            root_exes = [f for f in folder_path.glob("*.exe") if f.is_file()]
+            if root_exes:
+                candidate = root_exes[0]
+            else:
+                # Check nested binaries
+                nested_exes = [f for f in folder_path.glob("**/*.exe") if f.is_file()]
+                if nested_exes:
+                    candidate = nested_exes[0]
+                    target_exe_path = candidate.parent / target_exe_name
+
+        if candidate and candidate.is_file():
+            old_name = candidate.name
+            try:
+                candidate.rename(target_exe_path)
+                return True, target_exe_path, f"Ejecutable renombrado exitosamente: '{old_name}' ➜ '{target_exe_name}'"
+            except Exception as e:
+                return False, target_exe_path, f"Error renombrando ejecutable '{old_name}': {e}"
+
+        return False, target_exe_path, f"No se encontró ningún archivo .exe en '{folder_path}' para renombrar a '{target_exe_name}'."
+

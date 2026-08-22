@@ -6,10 +6,12 @@ dynamic executable discovery, and atomic extraction.
 
 import hashlib
 import os
+import sys
 import shutil
 import subprocess
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import List, Optional, Tuple
+
 
 
 class TemplateManager:
@@ -34,20 +36,41 @@ class TemplateManager:
     @staticmethod
     def find_extractor() -> Tuple[str, str]:
         """
-        Locates an available RAR extraction utility on system PATH.
+        Locates an available RAR extraction utility on system PATH or standard Windows locations.
         Returns tuple of (tool_name, tool_path).
         """
         for tool in ["7z", "7zz", "unrar"]:
             path = shutil.which(tool)
             if path:
                 return tool, path
+
+        # Check standard Windows installation directories if on Windows
+        if sys.platform == "win32":
+            prog_files = []
+            for env_var in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
+                val = os.environ.get(env_var)
+                if val:
+                    prog_files.append(val)
+            if not prog_files:
+                prog_files = [r"C:\Program Files", r"C:\Program Files (x86)"]
+
+            for pf in prog_files:
+                z7_candidate = os.path.join(pf, "7-Zip", "7z.exe")
+                if os.path.isfile(z7_candidate):
+                    return "7z", z7_candidate
+                unrar_candidate = os.path.join(pf, "WinRAR", "UnRAR.exe")
+                if os.path.isfile(unrar_candidate):
+                    return "unrar", unrar_candidate
+
+
         raise RuntimeError(
             "Cannot extract archive. No RAR extractor found on PATH.\n"
             "Please install one of the following:\n"
             "  - 7-Zip / 7zz (Linux: sudo apt/pacman install 7zip or 7-zip)\n"
             "  - unrar\n"
-            "Windows: Install 7-Zip and ensure 7z.exe is in system PATH."
+            "Windows: Install 7-Zip (https://www.7-zip.org) or add 7z.exe to system PATH."
         )
+
 
     def list_entries(self) -> List[str]:
         """

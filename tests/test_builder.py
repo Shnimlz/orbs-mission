@@ -113,3 +113,78 @@ def test_full_build_execution(tmp_path: Path):
     assert (final_dest / "WordpadFilter.dll").exists()
     assert (final_dest / "es-MX" / "wordpad.exe.mui").exists()
     assert (final_dest / "en-US").is_dir()
+
+
+def test_discover_existing_folders(tmp_path: Path):
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    # Create direct folder
+    direct_game = output_dir / "DirectGame"
+    direct_game.mkdir()
+    (direct_game / "DirectGame.exe").write_text("dummy")
+
+    # Create steam folder
+    steam_game = output_dir / "steamapps" / "common" / "SteamGame"
+    steam_game.mkdir(parents=True)
+    (steam_game / "SteamGame.exe").write_text("dummy")
+
+    # Discovered folders
+    folders = FilesystemBuilder.discover_existing_folders(output_dir)
+    assert len(folders) == 2
+
+    names = {f.name: f for f in folders}
+    assert "DirectGame" in names
+    assert names["DirectGame"].layout == "direct"
+    assert "DirectGame.exe" in names["DirectGame"].executables
+
+    assert "SteamGame" in names
+    assert names["SteamGame"].layout == "steam"
+    assert "SteamGame.exe" in names["SteamGame"].executables
+
+
+def test_rename_executable_in_folder(tmp_path: Path):
+    game_dir = tmp_path / "ExistingGame"
+    game_dir.mkdir()
+
+    # 1. Rename when candidate exe is present
+    source_exe = game_dir / "Rouge-Win64-Shipping.exe"
+    source_exe.write_text("bin")
+
+    success, final_path, msg = FilesystemBuilder.rename_executable_in_folder(
+        game_dir,
+        target_exe_name="NewGame.exe",
+        source_exe_name="Rouge-Win64-Shipping.exe"
+    )
+    assert success is True
+    assert final_path.name == "NewGame.exe"
+    assert final_path.exists()
+    assert not source_exe.exists()
+
+    # 2. Idempotent call when target exe already exists
+    success2, final_path2, msg2 = FilesystemBuilder.rename_executable_in_folder(
+        game_dir,
+        target_exe_name="NewGame.exe"
+    )
+    assert success2 is True
+    assert "ya está presente" in msg2
+
+    # 3. Rename without source_exe hint (detects root exe)
+    success3, final_path3, msg3 = FilesystemBuilder.rename_executable_in_folder(
+        game_dir,
+        target_exe_name="ThirdName.exe"
+    )
+    assert success3 is True
+    assert final_path3.name == "ThirdName.exe"
+    assert final_path3.exists()
+
+    # 4. Folder without any executables
+    empty_dir = tmp_path / "EmptyGame"
+    empty_dir.mkdir()
+    success4, final_path4, msg4 = FilesystemBuilder.rename_executable_in_folder(
+        empty_dir,
+        target_exe_name="Never.exe"
+    )
+    assert success4 is False
+    assert "No se encontró ningún archivo" in msg4
+

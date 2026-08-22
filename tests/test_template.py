@@ -68,3 +68,20 @@ def test_missing_template_handling(tmp_path: Path):
     missing_file = tmp_path / "nonexistent.rar"
     with pytest.raises(FileNotFoundError):
         TemplateManager(missing_file)
+
+
+def test_windows_extractor_search(tmp_path: Path, monkeypatch):
+    from unittest.mock import patch
+    dummy_prog_files = tmp_path / "ProgramFiles"
+    z7_dir = dummy_prog_files / "7-Zip"
+    z7_dir.mkdir(parents=True)
+    (z7_dir / "7z.exe").write_text("dummy 7z")
+
+    monkeypatch.setenv("ProgramFiles", str(dummy_prog_files))
+    with patch("shutil.which", return_value=None), \
+         patch("sys.platform", "win32"):
+        tool, tool_path = TemplateManager.find_extractor()
+        assert tool == "7z"
+        assert str(z7_dir / "7z.exe") in tool_path
+
+

@@ -25,6 +25,7 @@ class BuildConfig:
     allow_external_destination: bool = False
     dry_run: bool = False
     verbose: bool = False
+    run_wine: bool = False
 
     @classmethod
     def from_json(cls, json_path: Path) -> "BuildConfig":
@@ -50,4 +51,6 @@ class BuildConfig:
             allow_external_destination=data.get("allowExternalDestination", False),
             dry_run=data.get("dryRun", False),
             verbose=data.get("verbose", False),
+            run_wine=data.get("runWine", False),
         )
+
