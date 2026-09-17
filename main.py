@@ -9,6 +9,7 @@ import platform
 import shutil
 import time
 from pathlib import Path
+from typing import Optional
 
 from src.cli import (
     parse_args,
